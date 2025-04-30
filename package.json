@@ -1,7 +1,7 @@
 {
   "name": "koishi-plugin-network-integral",
   "description": "自用插件，可配置指令指向http接口",
-  "version": "0.0.1",
+  "version": "0.0.2",
   "main": "src/index.ts",
   "typings": "lib/index.d.ts",
   "files": [
@@ -10,10 +10,19 @@
   ],
   "license": "MIT",
   "keywords": [
-    "chatbot",
-    "koishi",
-    "plugin"
+    "integral"
   ],
+  "contributors": [
+    "Chomoe <494089941@qq.com>"
+  ],
+  "homepage": "https://github.com/meng-fucius/koishi-plugin-network-integral",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/meng-fucius/koishi-plugin-network-integral"
+  },
+  "koishi":{
+    "preview": true
+  },
   "devDependencies": {
     "@koishijs/client": "^5.30.4",
     "@types/node": "^22.15.3",

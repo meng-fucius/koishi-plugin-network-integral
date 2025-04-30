@@ -17,13 +17,6 @@ export interface Config {
     rankSuccess: string | string[]
     operationFail: string | string[]
   }
-  permissions: {
-    give: number
-    deduct: number
-    transfer: number
-    query: number
-    rank: number
-  }
   api: {
     baseUrl: string
     endpoints: {
