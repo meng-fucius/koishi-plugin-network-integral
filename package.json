@@ -1,7 +1,7 @@
 {
   "name": "koishi-plugin-network-integral",
   "description": "自用插件，可配置指令指向http接口",
-  "version": "0.0.2",
+  "version": "1.0.0",
   "main": "src/index.ts",
   "typings": "lib/index.d.ts",
   "files": [
@@ -20,7 +20,7 @@
     "type": "git",
     "url": "git+https://github.com/meng-fucius/koishi-plugin-network-integral"
   },
-  "koishi":{
+  "koishi": {
     "preview": true
   },
   "devDependencies": {

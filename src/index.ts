@@ -110,15 +110,15 @@ export const Config: Schema<Config> = Schema.object({
       Schema.string().description("默认模板"),
       Schema.array(Schema.string()).description("随机选择")
     ])
-      .default(['当前积分：%score%', '您现有积分：%score%'])
+      .default(['当前积分：%score%,排名%rank%', '您现有积分：%score%,排名%rank%'])
       .description('查询成功提示'),
 
     rankSuccess: Schema.union([
       Schema.string().description("默认模板"),
       Schema.array(Schema.string()).description("随机选择")
     ])
-      .default('🏆 积分排行榜：\n%rank%')
-      .description('排行榜提示'),
+      .default('第%rank%名 %user% 积分：%score%')
+      .description('排行榜单行格式，可用占位符：%rank%, %user%, %score%'),
 
     operationFail: Schema.union([
       Schema.string().description("默认模板"),
@@ -150,98 +150,119 @@ export function apply(ctx: Context, config: Config) {
   ctx.on('message', async (session) => {
     if (session.subtype !== 'group') return
     if (Math.random() > config.probability) return
-
+    const targetUser = await session.bot.getUser(userId)
+    const userName = targetUser?.name || `用户${userId.slice(-4)}`
     try {
       const response = await axios.post(`${config.api.baseUrl}/${config.api.endpoints.modify}`, {
         userId: session.userId,
-        groupId: session.guildId,
-        operation: 'add',
+        name: userName,
+        operation: 'randomAdd',
         amount: 1
       })
 
-      if (response.data.success) {
+      if (response.data.code===0) {
         const template = getRandomMessage(config.messages.addSuccess)
         const message = replacePlaceholders(template, {
           user: session.username,
-          score: response.data.score
+          score: response.data.data.score
         })
         session.send(message)
+      }else {
+        ctx.logger.warn('积分添加失败:', response.data.message)
       }
     } catch (error) {
-      ctx.logger.warn('积分添加失败:', error)
+      ctx.logger.warn('http异常:', error)
     }
   })
 
   // 赠送积分指令
-  ctx.command('赠送积分 <target:string> <amount:number>')
+  ctx.command('赠送积分 <target:user> <amount:number>')
     .action(async ({session}, target, amount) => {
       if (!session) return
-
+      const userId = target.id
+      const username = target.name || target.nickname
       try {
         await axios.post(`${config.api.baseUrl}/${config.api.endpoints.modify}`, {
-          operator: session.userId,
-          target,
-          amount,
-          operation: 'give'
+          userId: userId,
+          operation: 'add',
+          name:username,
+          amount: amount
         })
 
-        const template = getRandomMessage(
-          config.messages.giveSuccess
-        )
-        return replacePlaceholders(template, {
-          target,
-          amount: amount.toString()
-        })
+        if (response.data.code===0) {
+          const template = getRandomMessage(
+            config.messages.giveSuccess
+          )
+          return replacePlaceholders(template, {
+            target:username,
+            amount: amount.toString()
+          })
+        }else {
+          ctx.logger.warn('积分赠送失败:', response.data.message)
+        }
       } catch (error) {
         return config.messages.operationFail
       }
     })
 
   // 扣除积分指令
-  ctx.command('扣除积分 <target:string> <amount:number>')
+  ctx.command('扣除积分 <target:user> <amount:number>')
     .action(async ({session}, target, amount) => {
       if (!session) return
-
+      const userId = target.id
+      const username = target.name || target.nickname
       try {
         await axios.post(`${config.api.baseUrl}/${config.api.endpoints.modify}`, {
-          operator: session.userId,
-          target,
-          amount,
-          operation: 'deduct'
+          userId: userId,
+          operation: 'deduct',
+          amount: amount
         })
 
-        const template = getRandomMessage(
-          config.messages.deductSuccess
-        )
-        return replacePlaceholders(template, {
-          target,
-          amount: amount.toString()
-        })
+        if (response.data.code===0) {
+          const template = getRandomMessage(
+            config.messages.deductSuccess
+          )
+          return replacePlaceholders(template, {
+            target:username,
+            amount: amount.toString()
+          })
+        }else {
+          ctx.logger.warn('积分扣除失败:', response.data.message)
+        }
+
       } catch (error) {
         return config.messages.operationFail
       }
     })
 
   // 转赠积分指令
-  ctx.command('转赠积分 <target:string> <amount:number>')
-    .action(async ({session}, target, amount) => {
+  ctx.command('转赠积分 <target1:user> <target2:user> <amount:number>')
+    .action(async ({session}, target1,target2, amount) => {
       if (!session) return
-
+      const userId1 = target1.id
+      const username1 = target1.name || target1.nickname
+      const userId2 = target2.id
+      const username2 = target2.name || target2.nickname
       try {
         await axios.post(`${config.api.baseUrl}/${config.api.endpoints.modify}`, {
-          operator: session.userId,
-          target,
-          amount,
-          operation: 'transfer'
+          userId:userId1,
+          target:userId2,
+          operation: 'transfer',
+          amount: amount
         })
 
-        const template = getRandomMessage(
-          config.messages.transferSuccess
-        )
-        return replacePlaceholders(template, {
-          target,
-          amount: amount.toString()
-        })
+        if (response.data.code===0) {
+          const template = getRandomMessage(
+            config.messages.transferSuccess
+          )
+          return replacePlaceholders(template, {
+            target:username2,
+            amount: amount.toString()
+          })
+        }else {
+          ctx.logger.warn('积分转赠失败:', response.data.message)
+        }
+
       } catch (error) {
         return config.messages.operationFail
       }
@@ -257,10 +278,15 @@ export function apply(ctx: Context, config: Config) {
           params: { userId: session.userId }
         })
 
-        const template = getRandomMessage(config.messages.querySuccess)
-        return replacePlaceholders(template, {
-          score: response.data.score
-        })
+        if (response.data.code===0) {
+          const template = getRandomMessage(config.messages.querySuccess)
+          return replacePlaceholders(template, {
+            score: response.data.score,
+            rank: response.data.rank
+          })
+        }else {
+          ctx.logger.warn('积分查询失败:', response.data.message)
+        }
       } catch (error) {
         return config.messages.operationFail
       }
@@ -274,10 +300,20 @@ export function apply(ctx: Context, config: Config) {
       try {
         const response = await axios.get(`${config.api.baseUrl}/${config.api.endpoints.rank}`)
 
-        const template = getRandomMessage(config.messages.rankSuccess)
-        return replacePlaceholders(template, {
-          rank: response.data.rank.join('\n')
-        })
+        if (response.data.code===0) {
+          const template = getRandomMessage(config.messages.rankSuccess)
+          let output="🏆 积分排行榜："
+          for (const [index, item] of response.data.data.rank.entries()) {
+            output += '\n' + template
+              .replace('%rank%', (index + 1).toString())
+              .replace('%user%', item.name)
+              .replace('%score%', item.score.toString())
+          }
+          return output
+        }else {
+          ctx.logger.warn('积分排行查询失败:', response.data.message)
+        }
+
       } catch (error) {
         return config.messages.operationFail
       }
