@@ -82,7 +82,7 @@ export const Config: Schema<Config> = Schema.object({
         '随机加分消息模板 (支持多个候选用 \\n 分隔)',
         '可用占位符：',
         '• %user% - 用户名',
-        '• %score% - 当前积分'
+        '• %score% - 操作后积分'
       ].join('\n')),
 
     giveSuccess: Schema.union([
@@ -90,35 +90,54 @@ export const Config: Schema<Config> = Schema.object({
       Schema.array(Schema.string()).description("随机选择")
     ])
       .default('成功赠送 %amount% 积分给 %target%')
-      .description('赠送成功提示'),
+      .description(['赠送成功提示',
+        '可用占位符：',
+        '• %amount% - 赠送积分',
+        '• %target% - 赠送对象',
+        '• %score% - 操作后积分'].join('\n')),
 
     deductSuccess: Schema.union([
       Schema.string().description("默认模板"),
       Schema.array(Schema.string()).description("随机选择")
     ])
       .default('已扣除 %target% %amount% 积分')
-      .description('扣除成功提示'),
+      .description(['扣除成功提示' ,
+        '可用占位符：',
+        '• %amount% - 扣除积分',
+        '• %target% - 扣除对象',
+        '• %score% - 操作后积分'].join('\n')),
 
     transferSuccess: Schema.union([
       Schema.string().description("默认模板"),
       Schema.array(Schema.string()).description("随机选择")
     ])
       .default('转赠 %amount% 积分给 %target% 成功')
-      .description('转赠成功提示'),
+      .description(['转赠成功提示' ,
+        '可用占位符：',
+        '• %amount% - 转赠积分',
+        '• %target% - 转赠对象',
+        '• %score% - 操作后积分'].join('\n')),
 
     querySuccess: Schema.union([
       Schema.string().description("默认模板"),
       Schema.array(Schema.string()).description("随机选择")
     ])
       .default(['当前积分：%score%,排名%rank%', '您现有积分：%score%,排名%rank%'])
-      .description('查询成功提示'),
+      .description(['查询成功提示' ,
+        '可用占位符：',
+        '• %rank% - 当前排名',
+        '• %score% - 当前积分'].join('\n')),
 
     rankSuccess: Schema.union([
       Schema.string().description("默认模板"),
       Schema.array(Schema.string()).description("随机选择")
     ])
       .default('第%rank%名 %user% 积分：%score%')
-      .description('排行榜单行格式，可用占位符：%rank%, %user%, %score%'),
+      .description(['排行榜单行格式' ,
+        '可用占位符：' ,
+        '• %rank% - 排名' ,
+        '• %user% - 名称' ,
+        '• %score% - 当前积分'].join('\n')),
 
     operationFail: Schema.union([
       Schema.string().description("默认模板"),
@@ -195,7 +214,8 @@ export function apply(ctx: Context, config: Config) {
           )
           return replacePlaceholders(template, {
             target:username,
-            amount: amount.toString()
+            amount: amount.toString(),
+            score: response.data.data.score
           })
         }else {
           ctx.logger.warn('积分赠送失败:', response.data.message)
@@ -224,7 +244,8 @@ export function apply(ctx: Context, config: Config) {
           )
           return replacePlaceholders(template, {
             target:username,
-            amount: amount.toString()
+            amount: amount.toString(),
+            score:response.data.data.score
           })
         }else {
           ctx.logger.warn('积分扣除失败:', response.data.message)
@@ -257,7 +278,8 @@ export function apply(ctx: Context, config: Config) {
           )
           return replacePlaceholders(template, {
             target:username2,
-            amount: amount.toString()
+            amount: amount.toString(),
+            score: response.data.data.score
           })
         }else {
           ctx.logger.warn('积分转赠失败:', response.data.message)
@@ -281,8 +303,8 @@ export function apply(ctx: Context, config: Config) {
         if (response.data.code===0) {
           const template = getRandomMessage(config.messages.querySuccess)
           return replacePlaceholders(template, {
-            score: response.data.score,
-            rank: response.data.rank
+            score: response.data.data.score,
+            rank: response.data.data.rank
           })
         }else {
           ctx.logger.warn('积分查询失败:', response.data.message)
@@ -303,7 +325,10 @@ export function apply(ctx: Context, config: Config) {
         if (response.data.code===0) {
           const template = getRandomMessage(config.messages.rankSuccess)
           let output="🏆 积分排行榜："
-          for (const [index, item] of response.data.data.rank.entries()) {
+          ctx.logger.warn(response.data.data)
+          const rankList = response.data.data.rank
+          for (let index = 0; index < rankList.length; index++) {
+            const item = rankList[index]
             output += '\n' + template
               .replace('%rank%', (index + 1).toString())
               .replace('%user%', item.name)
