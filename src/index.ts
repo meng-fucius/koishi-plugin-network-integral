@@ -305,6 +305,8 @@ export function apply(ctx: Context, config: Config) {
         const response = await axios.post(`${config.api.baseUrl}/${config.api.endpoints.modify}`, {
           userId: userId1,
           target: userId2,
+          name:userName1,
+          targetName:userName2,
           operation: 'transfer',
           amount: amount
         })
