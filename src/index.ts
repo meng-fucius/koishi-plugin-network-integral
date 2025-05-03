@@ -1,8 +1,6 @@
-import {Context, Schema} from 'koishi'
-import {resolve} from 'path'
+import {Context, h, Schema} from 'koishi'
 import {} from '@koishijs/plugin-console'
 import axios from 'axios'
-import {adaptUser} from "@koishijs/plugin-adapter-kook";
 
 export const name = 'network-integral'
 
@@ -171,10 +169,9 @@ export function apply(ctx: Context, config: Config) {
 
   // 中间件处理普通消息
   ctx.middleware(async (session, next) => {
-    if (session.handled) return next()
-   // 监听群消息
-    if (session.subtype !== 'group') return
-    if (Math.random() > config.probability) return
+    // 监听群消息
+    if (session.subtype !== 'group') return next()
+    if (Math.random() > config.probability) return next()
     const userInfo = await session.bot.getUser(session.userId)
     const userName = userInfo?.name || `用户${session.userId.slice(-4)}`
     try {
@@ -188,10 +185,10 @@ export function apply(ctx: Context, config: Config) {
       if (response.data.code === 0) {
         const template = getRandomMessage(config.messages.addSuccess)
         const message = replacePlaceholders(template, {
-          user: userName,
+          user: `<at id="${session.userId}">${session.username}</at>`,
           score: response.data.data.score
         })
-        session.send(message)
+        return next()
       } else {
         ctx.logger.warn('积分添加失败:', response.data.message)
       }
@@ -227,7 +224,7 @@ export function apply(ctx: Context, config: Config) {
             config.messages.giveSuccess
           )
           return replacePlaceholders(template, {
-            target: userName,
+            target: `<at id="${userId}">${userName}</at>`,
             amount: amount.toString(),
             score: response.data.data.score
           })
@@ -263,7 +260,7 @@ export function apply(ctx: Context, config: Config) {
             config.messages.deductSuccess
           )
           return replacePlaceholders(template, {
-            target: userName,
+            target:`<at id="${userId}">${userName}</at>`,
             amount: amount.toString(),
             score: response.data.data.score
           })
@@ -282,7 +279,8 @@ export function apply(ctx: Context, config: Config) {
     .example('转赠积分 @Alice @Bob 100')
     .action(async ({session}, target1: string, target2: string, amount) => {
       if (!session) return
-
+      ctx.logger.warn(session.event.operator?.id,session.event.user?.name,'  operator')
+      ctx.logger.warn(session.event.user?.id,session.event.user?.name,'  user')
       const userId1 = parseUser(target1)
       const userId2 = parseUser(target2)
       if (userId1 === null || userId2 === null) {
@@ -314,8 +312,8 @@ export function apply(ctx: Context, config: Config) {
             config.messages.transferSuccess
           )
           return replacePlaceholders(template, {
-            user: userName1,
-            target: userName2,
+            user: `<at id="${userId1}">${userName1}</at>`,
+            target:`<at id="${userId2}">${userName2}</at>`,
             amount: amount.toString(),
             score: response.data.data.score
           })
@@ -341,6 +339,7 @@ export function apply(ctx: Context, config: Config) {
         if (response.data.code === 0) {
           const template = getRandomMessage(config.messages.querySuccess)
           return replacePlaceholders(template, {
+            user: `<at id="${session.userId}">${session.username}</at>`,
             score: response.data.data.score,
             rank: response.data.data.rank
           })
