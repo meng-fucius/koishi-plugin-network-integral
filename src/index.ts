@@ -205,6 +205,9 @@ export function apply(ctx: Context, config: Config) {
     .action(async ({session}, target:string , amount) => {
       if (!session) return
       const userId = parseUser(target)
+      if (userId ===null){
+        return '请输入赠送对象'
+      }
       const userInfo = await session.bot.getUser(userId)
       const userName = userInfo?.name || `用户${userId.slice(-4)}`
       try {
@@ -239,6 +242,9 @@ export function apply(ctx: Context, config: Config) {
     .action(async ({session}, target:string, amount) => {
       if (!session) return
       const userId = parseUser(target)
+      if (userId===null){
+        return '请输入扣除对象'
+      }
       const userInfo = await session.bot.getUser(userId)
       const userName = userInfo?.name || `用户${userId.slice(-4)}`
       try {
@@ -275,6 +281,9 @@ export function apply(ctx: Context, config: Config) {
 
       const userId1 = parseUser(target1)
       const userId2 = parseUser(target2)
+      if (userId1===null||userId2===null){
+        return '请输入转赠对象'
+      }
 
       if (!userId1 || !userId2) {
         return '请通过 @提及 指定用户'
