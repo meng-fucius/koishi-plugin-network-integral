@@ -164,13 +164,17 @@ export function apply(ctx: Context, config: Config) {
     )
   }
 
+  const parseUser = (text: string) => {
+    const match = text.match(/<at id="(\d+)"/) // 匹配 @提及 的 ID
+    return match ? match[1] : null
+  }
 
   // 监听群消息
   ctx.on('message', async (session) => {
     if (session.subtype !== 'group') return
     if (Math.random() > config.probability) return
-    const targetUser = await session.bot.getUser(userId)
-    const userName = targetUser?.name || `用户${userId.slice(-4)}`
+    const userInfo = await session.bot.getUser(session.userId)
+    const userName = userInfo?.name || `用户${session.userId.slice(-4)}`
     try {
       const response = await axios.post(`${config.api.baseUrl}/${config.api.endpoints.modify}`, {
         userId: session.userId,
@@ -182,7 +186,7 @@ export function apply(ctx: Context, config: Config) {
       if (response.data.code===0) {
         const template = getRandomMessage(config.messages.addSuccess)
         const message = replacePlaceholders(template, {
-          user: session.username,
+          user: userName,
           score: response.data.data.score
         })
         session.send(message)
@@ -195,16 +199,19 @@ export function apply(ctx: Context, config: Config) {
   })
 
   // 赠送积分指令
-  ctx.command('赠送积分 <target:user> <amount:number>')
-    .action(async ({session}, target, amount) => {
+  ctx.command('赠送积分 <target> <amount:number>')
+    .usage('格式：赠送积分 @用户1 数量')
+    .example('赠送积分 @Alice 100')
+    .action(async ({session}, target:string , amount) => {
       if (!session) return
-      const userId = target.id
-      const username = target.name || target.nickname
+      const userId = parseUser(target)
+      const userInfo = await session.bot.getUser(userId)
+      const userName = userInfo?.name || `用户${userId.slice(-4)}`
       try {
-        await axios.post(`${config.api.baseUrl}/${config.api.endpoints.modify}`, {
+        const response =  await axios.post(`${config.api.baseUrl}/${config.api.endpoints.modify}`, {
           userId: userId,
           operation: 'add',
-          name:username,
+          name:userName,
           amount: amount
         })
 
@@ -213,7 +220,7 @@ export function apply(ctx: Context, config: Config) {
             config.messages.giveSuccess
           )
           return replacePlaceholders(template, {
-            target:username,
+            target:userName,
             amount: amount.toString(),
             score: response.data.data.score
           })
@@ -226,13 +233,16 @@ export function apply(ctx: Context, config: Config) {
     })
 
   // 扣除积分指令
-  ctx.command('扣除积分 <target:user> <amount:number>')
-    .action(async ({session}, target, amount) => {
+  ctx.command('扣除积分 <target> <amount:number>')
+    .usage('格式：扣除积分 @用户1 数量')
+    .example('扣除积分 @Alice 100')
+    .action(async ({session}, target:string, amount) => {
       if (!session) return
-      const userId = target.id
-      const username = target.name || target.nickname
+      const userId = parseUser(target)
+      const userInfo = await session.bot.getUser(userId)
+      const userName = userInfo?.name || `用户${userId.slice(-4)}`
       try {
-        await axios.post(`${config.api.baseUrl}/${config.api.endpoints.modify}`, {
+        const response =   await axios.post(`${config.api.baseUrl}/${config.api.endpoints.modify}`, {
           userId: userId,
           operation: 'deduct',
           amount: amount
@@ -243,7 +253,7 @@ export function apply(ctx: Context, config: Config) {
             config.messages.deductSuccess
           )
           return replacePlaceholders(template, {
-            target:username,
+            target:userName,
             amount: amount.toString(),
             score:response.data.data.score
           })
@@ -257,15 +267,29 @@ export function apply(ctx: Context, config: Config) {
     })
 
   // 转赠积分指令
-  ctx.command('转赠积分 <target1:user> <target2:user> <amount:number>')
-    .action(async ({session}, target1,target2, amount) => {
+  ctx.command('转赠积分 <target1> <target2> <amount:number>')
+    .usage('格式：转赠积分 @用户1 @用户2 数量')
+    .example('转赠积分 @Alice @Bob 100')
+    .action(async ({session}, target1:string,target2:string, amount) => {
       if (!session) return
-      const userId1 = target1.id
-      const username1 = target1.name || target1.nickname
-      const userId2 = target2.id
-      const username2 = target2.name || target2.nickname
+
+      const userId1 = parseUser(target1)
+      const userId2 = parseUser(target2)
+
+      if (!userId1 || !userId2) {
+        return '请通过 @提及 指定用户'
+      }
+      // 校验积分数量
+      if (amount <= 0) {
+        return '积分数量必须大于 0'
+      }
+      const userInfo1 = await session.bot.getUser(userId1)
+      const userInfo2 = await session.bot.getUser(userId2)
+      const userName1 = userInfo1?.name || `用户${userId1.slice(-4)}`
+      const userName2 = userInfo2?.name || `用户${userId2.slice(-4)}`
+
       try {
-        await axios.post(`${config.api.baseUrl}/${config.api.endpoints.modify}`, {
+        const response =   await axios.post(`${config.api.baseUrl}/${config.api.endpoints.modify}`, {
           userId:userId1,
           target:userId2,
           operation: 'transfer',
@@ -277,7 +301,8 @@ export function apply(ctx: Context, config: Config) {
             config.messages.transferSuccess
           )
           return replacePlaceholders(template, {
-            target:username2,
+            user:userName1,
+            target:userName2,
             amount: amount.toString(),
             score: response.data.data.score
           })
