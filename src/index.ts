@@ -264,7 +264,9 @@ export function apply(ctx: Context, config: Config) {
             amount: amount.toString(),
             score: response.data.data.score
           })
-        } else {
+        } else if(response.data.code===40002){
+          return `<at id="${userId}">${userName}</at> 积分不足`
+        }else {
           ctx.logger.warn('积分扣除失败:', response.data.message)
         }
 
@@ -317,10 +319,11 @@ export function apply(ctx: Context, config: Config) {
             amount: amount.toString(),
             score: response.data.data.score
           })
-        } else {
+        } else if (response.data.code === 40002){
+          return `<at id="${userId1}">${userName1}</at> 积分不足`
+        }else {
           ctx.logger.warn('积分转赠失败:', response.data.message)
         }
-
       } catch (error) {
         return config.messages.operationFail
       }

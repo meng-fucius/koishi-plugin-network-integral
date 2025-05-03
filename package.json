@@ -1,7 +1,7 @@
 {
   "name": "koishi-plugin-network-integral",
   "description": "自用插件，可配置指令指向http接口",
-  "version": "1.0.4",
+  "version": "1.0.5",
   "main": "lib/index.js",
   "scripts": {
     "build": "tsc",
