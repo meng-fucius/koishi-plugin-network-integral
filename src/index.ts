@@ -188,7 +188,7 @@ export function apply(ctx: Context, config: Config) {
           user: `<at id="${session.userId}">${session.username}</at>`,
           score: response.data.data.score
         })
-        return next()
+        return next(message)
       } else {
         ctx.logger.warn('积分添加失败:', response.data.message)
       }
@@ -281,8 +281,6 @@ export function apply(ctx: Context, config: Config) {
     .example('转赠积分 @Alice @Bob 100')
     .action(async ({session}, target1: string, target2: string, amount) => {
       if (!session) return
-      ctx.logger.warn(session.event.operator?.id,session.event.user?.name,'  operator')
-      ctx.logger.warn(session.event.user?.id,session.event.user?.name,'  user')
       const userId1 = parseUser(target1)
       const userId2 = parseUser(target2)
       if (userId1 === null || userId2 === null) {
@@ -367,7 +365,6 @@ export function apply(ctx: Context, config: Config) {
         if (response.data.code === 0) {
           const template = getRandomMessage(config.messages.rankSuccess)
           let output = "🏆 积分排行榜："
-          ctx.logger.warn(response.data.data)
           const rankList = response.data.data.rank
           for (let index = 0; index < rankList.length; index++) {
             const item = rankList[index]
