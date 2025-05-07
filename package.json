@@ -1,7 +1,7 @@
 {
   "name": "koishi-plugin-network-integral",
   "description": "自用插件，可配置指令指向http接口",
-  "version": "1.0.7",
+  "version": "1.0.8",
   "main": "lib/index.js",
   "scripts": {
     "build": "tsc",
@@ -29,7 +29,6 @@
   },
   "devDependencies": {
     "@koishijs/client": "^5.30.4",
-    "@koishijs/plugin-common": "^6.0.0",
     "@types/node": "^22.15.3",
     "typescript": "^5.8.3"
   },
@@ -40,6 +39,7 @@
   "dependencies": {
     "@koishijs/loader": "^4.6.7",
     "axios": "^1.9.0",
-    "koishi": "^4.18.7"
+    "koishi": "^4.18.7",
+    "koishi-plugin-cron": "^3.1.0"
   }
 }

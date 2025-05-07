@@ -1,11 +1,41 @@
-import {Context, h, Schema} from 'koishi'
-import {} from '@koishijs/plugin-console'
+import {Context, h, Schema,$} from 'koishi'
+import {} from 'koishi-plugin-cron'
 import axios from 'axios'
 
 export const name = 'network-integral'
 
+export const inject = ['database','cron']
+
+export interface GroupInfo {
+  group_id: number
+  group_name: string
+}
+
+export interface GroupMemberInfo {
+  group_id: number
+  user_id: number
+  nickname: string
+  card: string
+  sex: string
+  age: string
+  area: string
+  join_time: number
+  last_sent_time: number
+  level: string
+  role: 'owner' | 'admin' | 'member'
+  unfriendly: boolean
+  title: string
+  title_expire_time: number
+  card_changeable: boolean
+  shut_up_timestamp: number
+}
+
+
 export interface Config {
   probability: number
+  scanInterval: string
+  autoKick: boolean
+  notifyUser: string
   messages: {
     addSuccess: string | string[]
     giveSuccess: string | string[]
@@ -34,6 +64,12 @@ export const Config: Schema<Config> = Schema.object({
     .default(0.1)
     .description('每次发言触发加分的概率 (0=不触发，1=100%触发)')
     .role('slider'),
+  // ========================
+  // 定时任务设置
+  // ========================
+  scanInterval: Schema.string().default('0 0 * * *').description('定时检测周期'),
+  autoKick: Schema.boolean().default(false).description('自动踢出模式'),
+  notifyUser: Schema.string().default('494089941').description('检测完成后通知qq'),
 
   // ========================
   // API 接口配置
@@ -146,6 +182,21 @@ export const Config: Schema<Config> = Schema.object({
   }).description('消息模版配置')
 })
 
+declare module 'koishi' {
+  interface Tables {
+    blacklist_manager: BlacklistItem
+  }
+}
+
+export interface BlacklistItem {
+  id: number
+  aid: number
+  userId: string
+  userName: string
+  createdAt: Date
+  operator: string
+}
+
 function getRandomMessage(messages: string | string[]): string {
   if (Array.isArray(messages)) {
     return messages[Math.floor(Math.random() * messages.length)]
@@ -154,6 +205,34 @@ function getRandomMessage(messages: string | string[]): string {
 }
 
 export function apply(ctx: Context, config: Config) {
+
+  // MySQL表结构定义
+  ctx.model.extend('blacklist_manager', {
+    id: { type: 'unsigned', nullable: false },
+    aid: { type: 'unsigned', length: 20, nullable: false },
+    userId: { type: 'string', length: 100, nullable: false },
+    userName: { type: 'string', length: 255, nullable: false },
+    createdAt: { type: 'timestamp', nullable: false },
+    operator: { type: 'string', length: 255 }
+  }, {
+    primary: 'id',
+    autoInc: true,
+    unique: [['aid']]
+  })
+
+
+  const blacklistLogger = ctx.logger('blacklist-manager')
+
+  // 优化版用户解析（使用JOIN+行锁）
+  async function resolveUser(userId: string):Promise<number> {
+
+   const aids= await ctx.database.get('binding',(row)=>$.eq(row.pid,userId),['aid'])
+    if (aids.length>0){
+      return aids[0].aid
+    }
+    return 0
+  }
+
   // 消息模板处理函数
   const replacePlaceholders = (template: string, data: Record<string, string>) => {
     return Object.entries(data).reduce(
@@ -166,6 +245,8 @@ export function apply(ctx: Context, config: Config) {
     const match = text.match(/<at id="(\d+)"/) // 匹配 @提及 的 ID
     return match ? match[1] : null
   }
+
+  const toAtUser = (userid: string, username: string) => `<at id="${userid}">${username}</at>`
 
   // 中间件处理普通消息
   ctx.middleware(async (session, next) => {
@@ -224,7 +305,7 @@ export function apply(ctx: Context, config: Config) {
             config.messages.giveSuccess
           )
           return replacePlaceholders(template, {
-            target: `<at id="${userId}">${userName}</at>`,
+            target: toAtUser(userId, userName),
             amount: amount.toString(),
             score: response.data.data.score
           })
@@ -260,13 +341,13 @@ export function apply(ctx: Context, config: Config) {
             config.messages.deductSuccess
           )
           return replacePlaceholders(template, {
-            target:`<at id="${userId}">${userName}</at>`,
+            target: `<at id="${userId}">${userName}</at>`,
             amount: amount.toString(),
             score: response.data.data.score
           })
-        } else if(response.data.code===40002){
+        } else if (response.data.code === 40002) {
           return `<at id="${userId}">${userName}</at> 积分不足`
-        }else {
+        } else {
           ctx.logger.warn('积分扣除失败:', response.data.message)
         }
 
@@ -303,8 +384,8 @@ export function apply(ctx: Context, config: Config) {
         const response = await axios.post(`${config.api.baseUrl}/${config.api.endpoints.modify}`, {
           userId: userId1,
           target: userId2,
-          name:userName1,
-          targetName:userName2,
+          name: userName1,
+          targetName: userName2,
           operation: 'transfer',
           amount: amount
         })
@@ -315,13 +396,13 @@ export function apply(ctx: Context, config: Config) {
           )
           return replacePlaceholders(template, {
             user: `<at id="${userId1}">${userName1}</at>`,
-            target:`<at id="${userId2}">${userName2}</at>`,
+            target: `<at id="${userId2}">${userName2}</at>`,
             amount: amount.toString(),
             score: response.data.data.score
           })
-        } else if (response.data.code === 40002){
+        } else if (response.data.code === 40002) {
           return `<at id="${userId1}">${userName1}</at> 积分不足`
-        }else {
+        } else {
           ctx.logger.warn('积分转赠失败:', response.data.message)
         }
       } catch (error) {
@@ -382,4 +463,117 @@ export function apply(ctx: Context, config: Config) {
         return config.messages.operationFail
       }
     })
+
+
+  // 批量事务操作
+  ctx.command('拉黑用户 <target:string>',)
+    .action(async ({session}, target: string) => {
+
+        if (session === null) return
+        const userId = parseUser(target)
+        if (userId === null) return '请通过 @提及 指定用户'
+      const userInfo = await session!.bot.getUser(userId)
+      const userName = userInfo?.name || `用户${userId.slice(-4)}`
+        const aid = await resolveUser(userId)
+        if (aid === 0) return `用户未绑定`
+        await ctx.database.withTransaction(async (t) => {
+          // 使用批量更新优化
+          await t.set('user', [aid], {authority: 0})
+
+          await t.upsert('blacklist_manager', (row) => [
+            {aid: aid, userId: userId, userName: userName, operator: session?.userId || 'system'}], ['aid'])
+        })
+      return `${toAtUser(userId, userName)}已被全局拉黑`
+      })
+  // 解除拉黑
+  ctx.command('blacklist.remove <target:string>', '解除拉黑')
+    .action(async ({session}, target: string) => {
+      if (session===null) return
+      const userId = parseUser(target)
+      if (userId === null) return '请通过 @提及 指定用户'
+      const userInfo = await session!.bot.getUser(userId)
+      const userName = userInfo?.name || `用户${userId.slice(-4)}`
+      const aid = await resolveUser(userId)
+      if (aid===0) return `用户未绑定`
+      try {
+        await ctx.database.withTransaction(async (t) => {
+          await t.set('user', [aid], {authority:1})
+          await t.remove('blacklist_manager', (row)=>$.eq(row.aid,aid))
+        })
+        return `${toAtUser(userId, userName)}已解除拉黑`
+      }catch (e){
+        blacklistLogger.info(`${userId}${userName} 拉黑失败`)
+      }
+
+
+    })
+
+  // 查询接口
+  ctx.command('blacklist.check <userId:string>', '查询状态')
+    .action(async ({session}, userId) => {
+      const exists = await ctx.database.get('blacklist_manager', {userId: userId})
+      return exists ? `用户 ${userId} 在全局黑名单中` : '用户未拉黑'
+    })
+
+  // 分页输出
+  ctx.command('blacklist.list', '列出黑名单')
+    .option('page', '-p <page:number>', {fallback: 1})
+    .action(async ({options}) => {
+      const pageSize = 10
+      const total = await ctx.database.select('blacklist_manager').execute(row => $.count(row.id))
+      const page=options?.page||1
+      const list = await  ctx.database.select('blacklist_manager').limit(pageSize)
+        .offset((page-1)*pageSize).orderBy('id','desc').execute()
+
+      return h('message', [
+        h.text(`黑名单记录（第${page}页）:\n`),
+        ...list.map(item =>
+          h.text(`${toAtUser(item.userId, item.userName)} - \n`)
+        ),
+        h.text(`共${total}条记录，使用 -p 参数翻页`)
+      ])
+    })
+  // 定时任务
+  if (config.autoKick) {
+    ctx.cron(config.scanInterval, () => {
+      blacklistLogger.info('启动定时黑名单扫描')
+      executeScan()
+    })
+  }
+
+  // 手动触发扫描
+  ctx.command('blacklist.scan', '检测群黑名单')
+    .action(({session}) => {
+      executeScan()
+      return '开始检测'
+    })
+
+  // 扫描执行器
+  async function executeScan() {
+    const blacklist= new Set((await ctx.database.select('blacklist_manager').execute()).map(black => black.userId))
+    for (const bot of ctx.bots) {
+      const guilds:GroupInfo[] = await bot.internal.getGroupList()
+      for (const guild of guilds) {
+        const memberList:GroupMemberInfo[] = await bot.internal.getGroupMemberList(guild.group_id)
+        let userId:number
+        for (const groupMemberInfo of memberList) {
+          if (groupMemberInfo.user_id===null){
+            continue
+          }else {
+            userId = groupMemberInfo.user_id
+          }
+          if (blacklist.has(`${userId}`)) {
+            try {
+              await bot.internal.set_group_kick(guild.group_id, userId)
+              blacklistLogger.success(`踢出用户 ${userId} 来自 ${guild.group_id}`)
+            } catch (error) {
+              blacklistLogger.warn(`踢出失败:${userId} 来自 ${guild.group_id}`)
+              continue
+            }
+            await bot.sendPrivateMessage(config.notifyUser, `踢出用户 ${userId} 来自 ${guild.group_id}`)
+          }
+        }
+      }
+    }
+  }
 }
