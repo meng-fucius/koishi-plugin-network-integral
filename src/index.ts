@@ -1,10 +1,10 @@
-import {Context, h, Schema,$} from 'koishi'
+import {Context, h, Schema, $} from 'koishi'
 import {} from 'koishi-plugin-cron'
 import axios from 'axios'
 
 export const name = 'network-integral'
 
-export const inject = ['database','cron']
+export const inject = ['database', 'cron']
 
 export interface GroupInfo {
   group_id: number
@@ -208,12 +208,13 @@ export function apply(ctx: Context, config: Config) {
 
   // MySQL表结构定义
   ctx.model.extend('blacklist_manager', {
-    id: { type: 'unsigned', nullable: false },
-    aid: { type: 'unsigned', length: 20, nullable: false },
-    userId: { type: 'string', length: 100, nullable: false },
-    userName: { type: 'string', length: 255, nullable: false },
-    createdAt: { type: 'timestamp', nullable: false },
-    operator: { type: 'string', length: 255 }
+    id: {type: 'unsigned', nullable: false},
+    aid: {type: 'unsigned', nullable: false},
+    userId: {type: 'string', length: 255, nullable: false},
+    userName: {type: 'string', length: 255, nullable: false},
+    createdAt: {
+      type: 'timestamp', nullable: false,initial:new Date(),},
+    operator: {type: 'string', length: 255}
   }, {
     primary: 'id',
     autoInc: true,
@@ -224,10 +225,10 @@ export function apply(ctx: Context, config: Config) {
   const blacklistLogger = ctx.logger('blacklist-manager')
 
   // 优化版用户解析（使用JOIN+行锁）
-  async function resolveUser(userId: string):Promise<number> {
+  async function resolveUser(userId: string): Promise<number> {
 
-   const aids= await ctx.database.get('binding',(row)=>$.eq(row.pid,userId),['aid'])
-    if (aids.length>0){
+    const aids = await ctx.database.get('binding', (row) => $.eq(row.pid, userId), ['aid'])
+    if (aids.length > 0) {
       return aids[0].aid
     }
     return 0
@@ -242,9 +243,14 @@ export function apply(ctx: Context, config: Config) {
   }
 
   const parseUser = (text: string) => {
-    const match = text.match(/<at id="(\d+)"/) // 匹配 @提及 的 ID
-    return match ? match[1] : null
-  }
+    // 匹配两种格式：
+    // 1. @提及格式：<at id="数字ID"
+    // 2. 纯数字 QQ 号：整个字符串为数字
+    const match = text.match(/<at id="(\d+)"|^(\d+)$/);
+
+    // 优先返回 @提及 的 ID，若不存在则检查纯数字
+    return match?.[1] ?? match?.[2] ?? null;
+  };
 
   const toAtUser = (userid: string, username: string) => `<at id="${userid}">${username}</at>`
 
@@ -465,43 +471,47 @@ export function apply(ctx: Context, config: Config) {
     })
 
 
-  // 批量事务操作
-  ctx.command('拉黑用户 <target:string>',)
+  // 拉黑用户
+  ctx.command('拉黑用户 <target:string>')
+    .usage('格式：拉黑用户 @用户1/QQ号')
+    .example('拉黑用户 @Alice')
     .action(async ({session}, target: string) => {
 
-        if (session === null) return
-        const userId = parseUser(target)
-        if (userId === null) return '请通过 @提及 指定用户'
-      const userInfo = await session!.bot.getUser(userId)
-      const userName = userInfo?.name || `用户${userId.slice(-4)}`
-        const aid = await resolveUser(userId)
-        if (aid === 0) return `用户未绑定`
-        await ctx.database.withTransaction(async (t) => {
-          // 使用批量更新优化
-          await t.set('user', [aid], {authority: 0})
-
-          await t.upsert('blacklist_manager', (row) => [
-            {aid: aid, userId: userId, userName: userName, operator: session?.userId || 'system'}], ['aid'])
-        })
-      return `${toAtUser(userId, userName)}已被全局拉黑`
-      })
-  // 解除拉黑
-  ctx.command('blacklist.remove <target:string>', '解除拉黑')
-    .action(async ({session}, target: string) => {
-      if (session===null) return
+      if (session === null) return
       const userId = parseUser(target)
       if (userId === null) return '请通过 @提及 指定用户'
       const userInfo = await session!.bot.getUser(userId)
       const userName = userInfo?.name || `用户${userId.slice(-4)}`
       const aid = await resolveUser(userId)
-      if (aid===0) return `用户未绑定`
+      if (aid === 0) return `用户未绑定`
+      await ctx.database.withTransaction(async (t) => {
+        // 使用批量更新优化
+        await t.set('user', [aid], {authority: 0})
+
+        await t.upsert('blacklist_manager', (row) => [
+          {aid: aid, userId: userId, userName: userName, operator: session?.userId || 'system'}], ['aid'])
+      })
+      return `${toAtUser(userId, userName)}已被全局拉黑`
+    })
+  // 解除拉黑
+  ctx.command('解除拉黑 <target:string>', '解除拉黑')
+    .usage('格式：解除拉黑 @用户1/QQ号')
+    .example('解除拉黑 123456789')
+    .action(async ({session}, target: string) => {
+      if (session === null) return
+      const userId = parseUser(target)
+      if (userId === null) return '请通过 @提及 指定用户'
+      const userInfo = await session!.bot.getUser(userId)
+      const userName = userInfo?.name || `用户${userId.slice(-4)}`
+      const aid = await resolveUser(userId)
+      if (aid === 0) return `用户未绑定`
       try {
         await ctx.database.withTransaction(async (t) => {
-          await t.set('user', [aid], {authority:1})
-          await t.remove('blacklist_manager', (row)=>$.eq(row.aid,aid))
+          await t.set('user', [aid], {authority: 1})
+          await t.remove('blacklist_manager', (row) => $.eq(row.aid, aid))
         })
         return `${toAtUser(userId, userName)}已解除拉黑`
-      }catch (e){
+      } catch (e) {
         blacklistLogger.info(`${userId}${userName} 拉黑失败`)
       }
 
@@ -509,26 +519,30 @@ export function apply(ctx: Context, config: Config) {
     })
 
   // 查询接口
-  ctx.command('blacklist.check <userId:string>', '查询状态')
+  ctx.command('查询黑名单 <userId:string>', '查询状态')
+    .usage('格式：查询黑名单 QQ号')
+    .example('查询黑名单 123456789')
     .action(async ({session}, userId) => {
       const exists = await ctx.database.get('blacklist_manager', {userId: userId})
       return exists ? `用户 ${userId} 在全局黑名单中` : '用户未拉黑'
     })
 
   // 分页输出
-  ctx.command('blacklist.list', '列出黑名单')
+  ctx.command('黑名单列表', '列出黑名单')
+    .usage('格式：黑名单列表 -p 页数')
+    .example('黑名单列表 -p 1')
     .option('page', '-p <page:number>', {fallback: 1})
     .action(async ({options}) => {
       const pageSize = 10
       const total = await ctx.database.select('blacklist_manager').execute(row => $.count(row.id))
-      const page=options?.page||1
-      const list = await  ctx.database.select('blacklist_manager').limit(pageSize)
-        .offset((page-1)*pageSize).orderBy('id','desc').execute()
+      const page = options?.page || 1
+      const list = await ctx.database.select('blacklist_manager').limit(pageSize)
+        .offset((page - 1) * pageSize).orderBy('id', 'desc').execute()
 
       return h('message', [
         h.text(`黑名单记录（第${page}页）:\n`),
         ...list.map(item =>
-          h.text(`${toAtUser(item.userId, item.userName)} - \n`)
+          h.text(`- @${item.userName} ${item.userId} - \n`)
         ),
         h.text(`共${total}条记录，使用 -p 参数翻页`)
       ])
@@ -542,7 +556,9 @@ export function apply(ctx: Context, config: Config) {
   }
 
   // 手动触发扫描
-  ctx.command('blacklist.scan', '检测群黑名单')
+  ctx.command('检测群黑名单', '检测bot所在群，若有成员在黑名单则踢出群')
+    .usage('格式：检测群黑名单')
+    .example('检测群黑名单')
     .action(({session}) => {
       executeScan()
       return '开始检测'
@@ -550,24 +566,25 @@ export function apply(ctx: Context, config: Config) {
 
   // 扫描执行器
   async function executeScan() {
-    const blacklist= new Set((await ctx.database.select('blacklist_manager').execute()).map(black => black.userId))
+    const blacklist = new Set((await ctx.database.select('blacklist_manager').execute()).map(black => black.userId))
     for (const bot of ctx.bots) {
-      const guilds:GroupInfo[] = await bot.internal.getGroupList()
+      const guilds: GroupInfo[] = await bot.internal.getGroupList()
       for (const guild of guilds) {
-        const memberList:GroupMemberInfo[] = await bot.internal.getGroupMemberList(guild.group_id)
-        let userId:number
+        const memberList: GroupMemberInfo[] = await bot.internal.getGroupMemberList(guild.group_id)
+        let userId: number
         for (const groupMemberInfo of memberList) {
-          if (groupMemberInfo.user_id===null){
+          if (groupMemberInfo.user_id === null) {
             continue
-          }else {
+          } else {
             userId = groupMemberInfo.user_id
           }
           if (blacklist.has(`${userId}`)) {
             try {
-              await bot.internal.set_group_kick(guild.group_id, userId)
+              await bot.internal.setGroupKick(guild.group_id, userId)
               blacklistLogger.success(`踢出用户 ${userId} 来自 ${guild.group_id}`)
             } catch (error) {
               blacklistLogger.warn(`踢出失败:${userId} 来自 ${guild.group_id}`)
+              blacklistLogger.warn(error)
               continue
             }
             await bot.sendPrivateMessage(config.notifyUser, `踢出用户 ${userId} 来自 ${guild.group_id}`)
