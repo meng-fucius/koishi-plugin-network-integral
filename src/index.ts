@@ -253,11 +253,11 @@ export function apply(ctx: Context, config: Config) {
   };
 
   // 解析是否为随机加分
-  function parseUserIdAndName(str) {
+  function parseUserIdAndName(str:string) {
     const pattern = /^randomAdd([^$]+)\$(.*)/;
     const match = str.match(pattern);
 
-    if (!match || match[1].length === 0) return null;
+    if (!match || match[1].length === 0) return {userId:"",userName:""};
 
     return {
       userId: match[1],
@@ -282,9 +282,11 @@ export function apply(ctx: Context, config: Config) {
     return next()
   })
 
-  ctx.before('send',(session, options)=>{
+  ctx.before('send',async (session, options)=>{
+    if (session.content === undefined) return
     if (session.content.startsWith('randomAdd')){
       const {userId,userName} = parseUserIdAndName(session.content)
+      if (userId==="") return
       try {
         const response = await axios.post(`${config.api.baseUrl}/${config.api.endpoints.modify}`, {
           userId: userId,
@@ -298,7 +300,8 @@ export function apply(ctx: Context, config: Config) {
             user: `<at id="${session.userId}">${session.username}</at>`,
             score: response.data.data.score
           })
-          return message
+          session.send(message)
+          return
         } else {
           ctx.logger.warn('积分添加失败:', response.data.message)
         }
@@ -617,10 +620,9 @@ export function apply(ctx: Context, config: Config) {
           }
         }
       }
+      await bot.sendPrivateMessage(config.notifyUser, `检测完成,本次共踢出${kickCount}人`)
     }
-    await bot.sendPrivateMessage(config.notifyUser, `检测完成,本次共踢出${kickCount}人`)
   }
-  ctx.middleware()
 
   // 监听入群申请
   ctx.on("guild-member-request", async (session) => {
@@ -645,10 +647,10 @@ export function apply(ctx: Context, config: Config) {
   });
 
   // 监听群成员减少事件
-  ctx.on('guild-member-removed', (session) => {
+  ctx.on('guild-member-removed', async (session) => {
     // 判断是否为踢人事件（而非成员主动退群）
     if (session===null) return
-    if (session.subType === 'kick') {
+    if (session.event._data.sub_type === 'kick') {
       const operatorId = session!.operatorId;
       const userId = session!.userId;
       const userInfo = await session!.bot.getUser(userId)
