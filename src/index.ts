@@ -213,7 +213,8 @@ export function apply(ctx: Context, config: Config) {
     userId: {type: 'string', length: 255, nullable: false},
     userName: {type: 'string', length: 255, nullable: false},
     createdAt: {
-      type: 'timestamp', nullable: false,initial:new Date(),},
+      type: 'timestamp', nullable: false, initial: new Date(),
+    },
     operator: {type: 'string', length: 255}
   }, {
     primary: 'id',
@@ -253,11 +254,11 @@ export function apply(ctx: Context, config: Config) {
   };
 
   // 解析是否为随机加分
-  function parseUserIdAndName(str:string) {
+  function parseUserIdAndName(str: string) {
     const pattern = /^randomAdd([^$]+)\$(.*)/;
     const match = str.match(pattern);
 
-    if (!match || match[1].length === 0) return {userId:"",userName:""};
+    if (!match || match[1].length === 0) return {userId: "", userName: ""};
 
     return {
       userId: match[1],
@@ -272,21 +273,21 @@ export function apply(ctx: Context, config: Config) {
     // 监听群消息
     if (session.subtype !== 'group') return next()
     if (Math.random() > config.probability) return next()
-    const { content, uid, userId } = session
+    const {content, uid, userId} = session
     // 机器人消息不触发
     if (ctx.bots[uid]) return
     const userInfo = await session.bot.getUser(session.userId)
     const userName = userInfo?.name || `用户${session.userId.slice(-4)}`
-    const message=`randomAdd${userId}\$${userName}`
+    const message = `randomAdd${userId}\$${userName}`
     return next(message)
-    return next()
   })
 
-  ctx.before('send',async (session, options)=>{
+  ctx.before('send', async (session, options) => {
     if (session.content === undefined) return
-    if (session.content.startsWith('randomAdd')){
-      const {userId,userName} = parseUserIdAndName(session.content)
-      if (userId==="") return
+    if (session.content.startsWith('randomAdd')) {
+      const {userId, userName} = parseUserIdAndName(session.content)
+      if (userId === "") return
+      session.content = ""
       try {
         const response = await axios.post(`${config.api.baseUrl}/${config.api.endpoints.modify}`, {
           userId: userId,
@@ -297,10 +298,10 @@ export function apply(ctx: Context, config: Config) {
         if (response.data.code === 0) {
           const template = getRandomMessage(config.messages.addSuccess)
           const message = replacePlaceholders(template, {
-            user: `<at id="${session.userId}">${session.username}</at>`,
+            user: `<at id="${userId}">${userName}</at>`,
             score: response.data.data.score
           })
-          session.send(message)
+          session.content = message
           return
         } else {
           ctx.logger.warn('积分添加失败:', response.data.message)
@@ -549,7 +550,7 @@ export function apply(ctx: Context, config: Config) {
     .example('查询黑名单 123456789')
     .action(async ({session}, userId) => {
       const exists = await ctx.database.get('blacklist_manager', {userId: userId})
-      return exists ? `用户 ${userId} 在全局黑名单中` : '用户未拉黑'
+      return exists.length > 0 ? `用户 ${userId} 在全局黑名单中` : '用户未拉黑'
     })
 
   // 分页输出
@@ -592,13 +593,13 @@ export function apply(ctx: Context, config: Config) {
   // 扫描执行器
   async function executeScan() {
     const blacklist = new Set((await ctx.database.select('blacklist_manager').execute()).map(black => black.userId))
-    let kickCount=0
+    let kickCount = 0
     for (const bot of ctx.bots) {
       const guilds: GroupInfo[] = await bot.internal.getGroupList()
       for (const guild of guilds) {
         const memberList: GroupMemberInfo[] = await bot.internal.getGroupMemberList(guild.group_id)
         let userId: number
-        let username:string
+        let username: string
         for (const groupMemberInfo of memberList) {
           if (groupMemberInfo.user_id === null) {
             continue
@@ -627,7 +628,7 @@ export function apply(ctx: Context, config: Config) {
   // 监听入群申请
   ctx.on("guild-member-request", async (session) => {
     const exists = await ctx.database.get('blacklist_manager', {userId: session.userId})
-    if (exists){
+    if (exists.length > 0) {
       await session.bot.handleGuildMemberRequest(
         session.messageId,
         false
@@ -638,7 +639,7 @@ export function apply(ctx: Context, config: Config) {
   // 监听入群邀请
   ctx.on("guild-request", async (session) => {
     const exists = await ctx.database.get('blacklist_manager', {userId: session.userId})
-    if (exists){
+    if (exists.length > 0) {
       await session.bot.handleGuildRequest(
         session.messageId,
         false
@@ -649,10 +650,10 @@ export function apply(ctx: Context, config: Config) {
   // 监听群成员减少事件
   ctx.on('guild-member-removed', async (session) => {
     // 判断是否为踢人事件（而非成员主动退群）
-    if (session===null) return
+    if (session === null) return
     if (session.event._data.sub_type === 'kick') {
-      const operatorId = session!.operatorId;
-      const userId = session!.userId;
+      const operatorId = session!.event._data.operator_id;
+      const userId = session!.event._data.user_id;
       const userInfo = await session!.bot.getUser(userId)
       const userName = userInfo?.name || `用户${userId.slice(-4)}`
       const aid = await resolveUser(userId)
@@ -662,7 +663,8 @@ export function apply(ctx: Context, config: Config) {
         await t.upsert('blacklist_manager', (row) => [
           {aid: aid, userId: userId, userName: userName, operator: operatorId || 'system'}], ['aid'])
       })
-      return `${toAtUser(userId, userName)}已被全局拉黑`
+      session.send(`${userName}${userId}已被全局拉黑`)
+      return
     }
   });
 }
