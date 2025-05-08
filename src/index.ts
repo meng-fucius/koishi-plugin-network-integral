@@ -224,7 +224,7 @@ export function apply(ctx: Context, config: Config) {
 
   const blacklistLogger = ctx.logger('blacklist-manager')
 
-  // 优化版用户解析（使用JOIN+行锁）
+  // 用户解析
   async function resolveUser(userId: string): Promise<number> {
 
     const aids = await ctx.database.get('binding', (row) => $.eq(row.pid, userId), ['aid'])
@@ -252,6 +252,19 @@ export function apply(ctx: Context, config: Config) {
     return match?.[1] ?? match?.[2] ?? null;
   };
 
+  // 解析是否为随机加分
+  function parseUserIdAndName(str) {
+    const pattern = /^randomAdd([^$]+)\$(.*)/;
+    const match = str.match(pattern);
+
+    if (!match || match[1].length === 0) return null;
+
+    return {
+      userId: match[1],
+      userName: match[2] || "", // 允许 userName 为空
+    };
+  }
+
   const toAtUser = (userid: string, username: string) => `<at id="${userid}">${username}</at>`
 
   // 中间件处理普通消息
@@ -259,31 +272,40 @@ export function apply(ctx: Context, config: Config) {
     // 监听群消息
     if (session.subtype !== 'group') return next()
     if (Math.random() > config.probability) return next()
+    const { content, uid, userId } = session
+    // 机器人消息不触发
+    if (ctx.bots[uid]) return
     const userInfo = await session.bot.getUser(session.userId)
     const userName = userInfo?.name || `用户${session.userId.slice(-4)}`
-    try {
-      const response = await axios.post(`${config.api.baseUrl}/${config.api.endpoints.modify}`, {
-        userId: session.userId,
-        name: userName,
-        operation: 'randomAdd',
-        amount: 1
-      })
-
-      if (response.data.code === 0) {
-        const template = getRandomMessage(config.messages.addSuccess)
-        const message = replacePlaceholders(template, {
-          user: `<at id="${session.userId}">${session.username}</at>`,
-          score: response.data.data.score
-        })
-        return next(message)
-      } else {
-        ctx.logger.warn('积分添加失败:', response.data.message)
-      }
-    } catch (error) {
-      ctx.logger.warn('http异常:', error)
-    }
-    // 普通消息处理逻辑...
+    const message=`randomAdd${userId}\$${userName}`
+    return next(message)
     return next()
+  })
+
+  ctx.before('send',(session, options)=>{
+    if (session.content.startsWith('randomAdd')){
+      const {userId,userName} = parseUserIdAndName(session.content)
+      try {
+        const response = await axios.post(`${config.api.baseUrl}/${config.api.endpoints.modify}`, {
+          userId: userId,
+          name: userName,
+          operation: 'randomAdd',
+          amount: 1
+        })
+        if (response.data.code === 0) {
+          const template = getRandomMessage(config.messages.addSuccess)
+          const message = replacePlaceholders(template, {
+            user: `<at id="${session.userId}">${session.username}</at>`,
+            score: response.data.data.score
+          })
+          return message
+        } else {
+          ctx.logger.warn('积分添加失败:', response.data.message)
+        }
+      } catch (error) {
+        ctx.logger.warn('http异常:', error)
+      }
+    }
   })
 
   // 赠送积分指令
@@ -567,30 +589,78 @@ export function apply(ctx: Context, config: Config) {
   // 扫描执行器
   async function executeScan() {
     const blacklist = new Set((await ctx.database.select('blacklist_manager').execute()).map(black => black.userId))
+    let kickCount=0
     for (const bot of ctx.bots) {
       const guilds: GroupInfo[] = await bot.internal.getGroupList()
       for (const guild of guilds) {
         const memberList: GroupMemberInfo[] = await bot.internal.getGroupMemberList(guild.group_id)
         let userId: number
+        let username:string
         for (const groupMemberInfo of memberList) {
           if (groupMemberInfo.user_id === null) {
             continue
           } else {
             userId = groupMemberInfo.user_id
+            username = groupMemberInfo.nickname
           }
           if (blacklist.has(`${userId}`)) {
             try {
               await bot.internal.setGroupKick(guild.group_id, userId)
-              blacklistLogger.success(`踢出用户 ${userId} 来自 ${guild.group_id}`)
+              blacklistLogger.success(`踢出用户 ${username} ${userId} 来自 ${guild.group_name} ${guild.group_id} `)
             } catch (error) {
-              blacklistLogger.warn(`踢出失败:${userId} 来自 ${guild.group_id}`)
+              blacklistLogger.warn(`踢出用户 ${username} ${userId} 来自 ${guild.group_name} ${guild.group_id}`)
               blacklistLogger.warn(error)
               continue
             }
             await bot.sendPrivateMessage(config.notifyUser, `踢出用户 ${userId} 来自 ${guild.group_id}`)
+            kickCount++
           }
         }
       }
     }
+    await bot.sendPrivateMessage(config.notifyUser, `检测完成,本次共踢出${kickCount}人`)
   }
+  ctx.middleware()
+
+  // 监听入群申请
+  ctx.on("guild-member-request", async (session) => {
+    const exists = await ctx.database.get('blacklist_manager', {userId: session.userId})
+    if (exists){
+      await session.bot.handleGuildMemberRequest(
+        session.messageId,
+        false
+      );
+    }
+  });
+
+  // 监听入群邀请
+  ctx.on("guild-request", async (session) => {
+    const exists = await ctx.database.get('blacklist_manager', {userId: session.userId})
+    if (exists){
+      await session.bot.handleGuildRequest(
+        session.messageId,
+        false
+      );
+    }
+  });
+
+  // 监听群成员减少事件
+  ctx.on('guild-member-removed', (session) => {
+    // 判断是否为踢人事件（而非成员主动退群）
+    if (session===null) return
+    if (session.subType === 'kick') {
+      const operatorId = session!.operatorId;
+      const userId = session!.userId;
+      const userInfo = await session!.bot.getUser(userId)
+      const userName = userInfo?.name || `用户${userId.slice(-4)}`
+      const aid = await resolveUser(userId)
+      if (aid === 0) return `用户未绑定`
+      await ctx.database.withTransaction(async (t) => {
+        await t.set('user', [aid], {authority: 0})
+        await t.upsert('blacklist_manager', (row) => [
+          {aid: aid, userId: userId, userName: userName, operator: operatorId || 'system'}], ['aid'])
+      })
+      return `${toAtUser(userId, userName)}已被全局拉黑`
+    }
+  });
 }
