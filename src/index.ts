@@ -275,7 +275,7 @@ export function apply(ctx: Context, config: Config) {
     if (Math.random() > config.probability) return next()
     const {content, uid, userId} = session
     // 机器人消息不触发
-    if (ctx.bots[uid]) return
+    if (session.userId===session.selfId) return next()
     const userInfo = await session.bot.getUser(session.userId)
     const userName = userInfo?.name || `用户${session.userId.slice(-4)}`
     const message = `randomAdd${userId}\$${userName}`
@@ -636,7 +636,7 @@ export function apply(ctx: Context, config: Config) {
     }
   });
 
-  // 监听入群邀请
+  // 监听入群邀请(注意群主邀请不会触发审核)
   ctx.on("guild-request", async (session) => {
     const exists = await ctx.database.get('blacklist_manager', {userId: session.userId})
     if (exists.length > 0) {
