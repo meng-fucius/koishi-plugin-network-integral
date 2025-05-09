@@ -268,19 +268,18 @@ export function apply(ctx: Context, config: Config) {
 
   const toAtUser = (userid: string, username: string) => `<at id="${userid}">${username}</at>`
 
-  // 中间件处理普通消息
+  // 中间件处理普通消息 提升为前置中间件，以解决触发了其他前置中间件后，此中间件仍然返回消息的问题
   ctx.middleware(async (session, next) => {
     // 监听群消息
     if (session.subtype !== 'group') return next()
     if (Math.random() > config.probability) return next()
     const {content, uid, userId} = session
     // 机器人消息不触发
-    if (session.userId===session.selfId) return next()
-    const userInfo = await session.bot.getUser(session.userId)
-    const userName = userInfo?.name || `用户${session.userId.slice(-4)}`
+    if (ctx.bots[uid]) return
+    const userName = session.username || `用户${session.userId.slice(-4)}`
     const message = `randomAdd${userId}\$${userName}`
     return next(message)
-  })
+  },true)
 
   ctx.before('send', async (session, options) => {
     if (session.content === undefined) return
