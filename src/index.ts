@@ -459,10 +459,13 @@ export function apply(ctx: Context, config: Config) {
     }
   })
 
+  ctx.command('integral',{authority:1})
+  ctx.command('integral.actions',{authority:1})
   // 赠送积分指令
-  ctx.command('赠送积分 <target> <amount:number>')
+  ctx.command('integral.actions.give <target> <amount:number>',{authority:3,checkArgCount:true})
     .usage('格式：赠送积分 @用户1 数量')
     .example('赠送积分 @Alice 100')
+    .alias('赠送积分')
     .action(async ({session}, target: string, amount) => {
       if (!session) return
       const userId = parseUser(target)
@@ -497,9 +500,10 @@ export function apply(ctx: Context, config: Config) {
     })
 
   // 扣除积分指令
-  ctx.command('扣除积分 <target> <amount:number>')
+  ctx.command('integral.actions.deduct <target> <amount:number>',{authority:3,checkArgCount:true})
     .usage('格式：扣除积分 @用户1 数量')
     .example('扣除积分 @Alice 100')
+    .alias('扣除积分')
     .action(async ({session}, target: string, amount) => {
       if (!session) return
       const userId = parseUser(target)
@@ -536,9 +540,10 @@ export function apply(ctx: Context, config: Config) {
     })
 
   // 转赠积分指令
-  ctx.command('转赠积分 <target1> <target2> <amount:number>')
+  ctx.command('integral.actions.transfer <target1> <target2> <amount:number>',{authority:3,checkArgCount:true})
     .usage('格式：转赠积分 @用户1 @用户2 数量')
     .example('转赠积分 @Alice @Bob 100')
+    .alias('转赠积分')
     .action(async ({session}, target1: string, target2: string, amount) => {
       if (!session) return
       const userId1 = parseUser(target1)
@@ -590,7 +595,8 @@ export function apply(ctx: Context, config: Config) {
     })
 
   // 查询积分指令
-  ctx.command('我的积分')
+  ctx.command('integral.actions.mine',{authority:1})
+    .alias('我的积分')
     .action(async ({session}) => {
       if (!session) return
 
@@ -615,7 +621,8 @@ export function apply(ctx: Context, config: Config) {
     })
 
   // 积分排行榜指令
-  ctx.command('积分排行')
+  ctx.command('integral.actions.rank',{authority:1})
+    .alias('积分排行')
     .action(async ({session}) => {
       if (!session) return
 
@@ -643,11 +650,13 @@ export function apply(ctx: Context, config: Config) {
       }
     })
 
+  ctx.command('integral.blacklist',{authority:3})
 
   // 拉黑用户
-  ctx.command('拉黑用户 <target:string>')
+  ctx.command('integral.blacklist.add <target:string>',{authority:3,checkArgCount:true})
     .usage('格式：拉黑用户 @用户1/QQ号')
     .example('拉黑用户 @Alice')
+    .alias('拉黑用户')
     .action(async ({session}, target: string) => {
 
       if (session === null) return
@@ -667,9 +676,10 @@ export function apply(ctx: Context, config: Config) {
       return `${toAtUser(userId, userName)}已被全局拉黑`
     })
   // 解除拉黑
-  ctx.command('解除拉黑 <target:string>', '解除拉黑')
+  ctx.command('integral.blacklist.remove <target:string>',{authority:3,checkArgCount:true})
     .usage('格式：解除拉黑 @用户1/QQ号')
     .example('解除拉黑 123456789')
+    .alias('解除拉黑')
     .action(async ({session}, target: string) => {
       if (session === null) return
       const userId = parseUser(target)
@@ -692,18 +702,20 @@ export function apply(ctx: Context, config: Config) {
     })
 
   // 查询接口
-  ctx.command('查询黑名单 <userId:string>', '查询状态')
+  ctx.command('integral.blacklist.query <userId:string>', {authority:3,checkArgCount:true})
     .usage('格式：查询黑名单 QQ号')
     .example('查询黑名单 123456789')
+    .alias('查询黑名单')
     .action(async ({session}, userId) => {
       const exists = await ctx.database.get('blacklist_manager', {userId: userId})
       return exists.length > 0 ? `用户 ${userId} 在全局黑名单中` : '用户未拉黑'
     })
 
   // 分页输出
-  ctx.command('黑名单列表', '列出黑名单')
+  ctx.command('integral.blacklist.list',{authority:3})
     .usage('格式：黑名单列表 -p 页数')
     .example('黑名单列表 -p 1')
+    .alias('黑名单列表')
     .option('page', '-p <page:number>', {fallback: 1})
     .action(async ({options}) => {
       const pageSize = 10
@@ -729,9 +741,10 @@ export function apply(ctx: Context, config: Config) {
   }
 
   // 手动触发扫描
-  ctx.command('检测群黑名单', '检测bot所在群，若有成员在黑名单则踢出群')
+  ctx.command('integral.blacklist.check', '检测bot所在群，若有成员在黑名单则踢出群',{authority:3})
     .usage('格式：检测群黑名单')
     .example('检测群黑名单')
+    .alias('检测群黑名单')
     .action(({session}) => {
       executeScan()
       return '开始检测'
@@ -805,6 +818,8 @@ export function apply(ctx: Context, config: Config) {
       const userName = userInfo?.name || `用户${userId.slice(-4)}`
       const aid = await resolveUser(userId)
       if (aid === 0) return `用户未绑定`
+      const isBlack = await isInBlacklist(userId)
+      if (isBlack) return
       await ctx.database.withTransaction(async (t) => {
         await t.set('user', [aid], {authority: 0})
         await t.upsert('blacklist_manager', (row) => [
