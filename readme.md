@@ -6,6 +6,6 @@
 
 ## 致谢
 
-本插件的黑名单部分实现参考了以下项目：
+本插件的部分实现参考了以下项目：
 - [KBot](https://github.com/Kabuda-czh/koishi-plugin-kbot/tree/master) by [Kabuda-czh](https://github.com/Kabuda-czh)
-
+- [koishi-plugin-keyword-filtering](https://github.com/Srlily/koishi-plugin-keyword-filtering) by [Srlily](https://github.com/Srlily)

@@ -34,6 +34,7 @@ export interface GroupMemberInfo {
 export interface Config {
   probability: number
   scanInterval: string
+  autoScan: boolean
   autoKick: boolean
   notifyUser: string
   messages: {
@@ -53,6 +54,13 @@ export interface Config {
       rank: string
     }
   }
+  keywordCheck: {
+    enabled: boolean
+    keywords: string[]
+    warnMessage: string | string[]  // 支持多条警告消息随机选择
+    muteThreshold: number  // 警告次数达到后禁言
+    muteDuration: number   // 禁言时长(秒)
+  }
 }
 
 export const Config: Schema<Config> = Schema.object({
@@ -68,7 +76,8 @@ export const Config: Schema<Config> = Schema.object({
   // 定时任务设置
   // ========================
   scanInterval: Schema.string().default('0 0 * * *').description('定时检测周期'),
-  autoKick: Schema.boolean().default(false).description('自动踢出模式'),
+  autoScan: Schema.boolean().default(false).description('定时检测开启'),
+  autoKick: Schema.boolean().default(false).description('黑名单发言自动踢出'),
   notifyUser: Schema.string().default('494089941').description('检测完成后通知qq'),
 
   // ========================
@@ -100,7 +109,30 @@ export const Config: Schema<Config> = Schema.object({
   })
     .description('后端接口配置')
     .role('form'),
-
+  // ========================
+  // 违禁词配置
+  // ========================
+  keywordCheck: Schema.object({
+    enabled: Schema.boolean().default(false).description('是否启用关键词检测'),
+    keywords: Schema.array(String).default([]).description('敏感关键词列表'),
+    muteThreshold: Schema.number()
+      .min(1)
+      .default(3)
+      .description('警告多少次后禁言'),
+    muteDuration: Schema.number()
+      .min(60)
+      .default(600)
+      .description('禁言时长(秒)'),
+    warnMessage: Schema.union([
+      Schema.string().description("默认警告消息"),
+      Schema.array(Schema.string()).description("随机选择警告消息")
+    ]).default(['请勿发送违规内容', '请注意发言内容']).description([
+      '警告消息模板 (支持多个候选用 \\n 分隔)',
+      '可用占位符：',
+      '• %user% - 用户名',
+      '• %count% - 违规次数',
+      '• %total% - 禁言阈值'].join('\n')),
+  }).description('关键词检测配置'),
   // ========================
   // 消息模板配置
   // ========================
@@ -185,6 +217,7 @@ export const Config: Schema<Config> = Schema.object({
 declare module 'koishi' {
   interface Tables {
     blacklist_manager: BlacklistItem
+    keyword_violations:KeywordViolations
   }
 }
 
@@ -195,6 +228,14 @@ export interface BlacklistItem {
   userName: string
   createdAt: Date
   operator: string
+}
+
+export interface KeywordViolations{
+  id: number
+  userId: string
+  guildId: string
+  count: number
+  lastViolation: Date
 }
 
 function getRandomMessage(messages: string | string[]): string {
@@ -222,6 +263,18 @@ export function apply(ctx: Context, config: Config) {
     unique: [['aid']]
   })
 
+  // 创建违规记录表
+  ctx.model.extend('keyword_violations', {
+    id: 'unsigned',
+    userId: 'string',
+    guildId: 'string',
+    count: {type: 'unsigned', initial: 0},
+    lastViolation: 'timestamp'
+  }, {
+    primary: 'id',
+    autoInc: true,
+    unique: [['userId', 'guildId']]
+  })
 
   const blacklistLogger = ctx.logger('blacklist-manager')
 
@@ -254,7 +307,7 @@ export function apply(ctx: Context, config: Config) {
   };
 
   // 解析是否为随机加分
-  function parseUserIdAndName(str: string) {
+  function parseRandomAdd(str: string) {
     const pattern = /^randomAdd([^$]+)\$(.*)/;
     const match = str.match(pattern);
 
@@ -268,23 +321,118 @@ export function apply(ctx: Context, config: Config) {
 
   const toAtUser = (userid: string, username: string) => `<at id="${userid}">${username}</at>`
 
-  // 中间件处理普通消息 提升为前置中间件，以解决触发了其他前置中间件后，此中间件仍然返回消息的问题
+  async function isInBlacklist  (userId:string):Promise<boolean>{
+    const exists = await ctx.database.get('blacklist_manager', {userId: userId})
+    return exists.length > 0
+  }
+
+  // 中间件处理普通消息
   ctx.middleware(async (session, next) => {
     // 监听群消息
-    if (session.subtype !== 'group') return next()
-    if (Math.random() > config.probability) return next()
-    const {content, uid, userId} = session
+    if (session.subtype !== 'group'||session.content===undefined) {
+      const  userInfo = await  session.getUser(session.userId)
+      if (userInfo.authority===0){
+        return
+      }else {
+        return next()
+      }
+    }
+    const { uid, userId,guildId,username,messageId} = session
     // 机器人消息不触发
     if (ctx.bots[uid]) return
-    const userName = session.username || `用户${session.userId.slice(-4)}`
-    const message = `randomAdd${userId}\$${userName}`
-    return next(message)
-  },true)
+
+    // 自动踢出黑名单的群友
+    if (config.autoKick){
+      const isBlack = await isInBlacklist(userId)
+      if (isBlack){
+        try {
+          await session.bot.kickGuildMember(guildId, userId)
+          return `发现黑名单用户${username}${userId},已踢出群聊`
+        }catch (e){
+          ctx.logger.warn(`踢出黑名单群员${userId} 来自 ${guildId} 失败`)
+        }
+
+      }
+    }
+    // 违禁词检测
+    const regex = new RegExp(
+      `(?<!\\[CQ:\\w+.*?\\])\\s*(${config.keywordCheck.keywords.join('|')})`,
+      'gis'
+    )
+    const rawContent = session.content!.replace(/\[CQ:\w+.*?\]/g, '')
+    const match:RegExpExecArray | null = regex.exec(rawContent)
+    if (match) {
+      const now = new Date()
+      // 1. 尝试撤回消息
+      try {
+        await session.bot.deleteMessage(guildId, messageId)
+      } catch (error) {
+        ctx.logger('keyword-check').warn('撤回消息失败:', error)
+      }
+      // 2. 更新违规记录
+      const record = await ctx.database.get('keyword_violations', {
+        userId,
+        guildId
+      })
+      let violationCount = 1
+      if (record.length > 0) {
+        violationCount = record[0].count + 1
+        await ctx.database.set('keyword_violations', record[0].id, {
+          count: violationCount,
+          lastViolation: now
+        })
+      } else {
+        await ctx.database.create('keyword_violations', {
+          userId,
+          guildId,
+          count: 1,
+          lastViolation: now
+        })
+      }
+      // 3. 发送警告或禁言
+      if (violationCount >= config.keywordCheck.muteThreshold) {
+        // 达到禁言阈值
+        try {
+          await session.bot.internal.setGroupBan(
+            guildId,
+            userId,
+            config.keywordCheck.muteDuration
+          )
+          return `${toAtUser(userId, username)} 因多次违规已被禁言`
+
+          // 重置计数
+          await ctx.database.set('keyword_violations', {userId, guildId}, {
+            count: 0
+          })
+        } catch (e) {
+          ctx.logger('keyword-check').warn(
+            `用户禁言失败`
+          )
+        }
+      } else {
+        // 发送警告
+        const warnMsg = getRandomMessage(config.keywordCheck.warnMessage)
+        return replacePlaceholders(warnMsg, {
+          user: toAtUser(userId, username),
+          count: `${violationCount}`,
+          total: `${config.keywordCheck.muteThreshold}`,
+        })
+      }
+      ctx.logger('keyword-check').info(
+        `检测到违规内容，用户 ${userId} 在群 ${guildId} 发送了关键词 "${match[1]}"`
+      )
+    } else {
+        const userInfo = await session.getUser(userId)
+      if (Math.random() > config.probability || userInfo.authority ===0 ) return next()
+      const message = `randomAdd${userId}\$${username}`
+      return next(message)
+    }
+  }, true)
 
   ctx.before('send', async (session, options) => {
     if (session.content === undefined) return
     if (session.content.startsWith('randomAdd')) {
-      const {userId, userName} = parseUserIdAndName(session.content)
+      const {userId, userName} = parseRandomAdd(session.content)
       if (userId === "") return
       session.content = ""
       try {
@@ -302,7 +450,7 @@ export function apply(ctx: Context, config: Config) {
           })
           session.content = message
           return
-        } else {
+        } else if (response.data.code !==40001) {
           ctx.logger.warn('积分添加失败:', response.data.message)
         }
       } catch (error) {
@@ -573,7 +721,7 @@ export function apply(ctx: Context, config: Config) {
       ])
     })
   // 定时任务
-  if (config.autoKick) {
+  if (config.autoScan) {
     ctx.cron(config.scanInterval, () => {
       blacklistLogger.info('启动定时黑名单扫描')
       executeScan()
