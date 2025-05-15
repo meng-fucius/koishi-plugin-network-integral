@@ -279,9 +279,9 @@ export function apply(ctx: Context, config: Config) {
   const blacklistLogger = ctx.logger('blacklist-manager')
 
   // 用户解析
-  async function resolveUser(userId: string): Promise<number> {
+  async function resolveUser(userId: string,platform:string): Promise<number> {
 
-    const aids = await ctx.database.get('binding', (row) => $.eq(row.pid, userId), ['aid'])
+    const aids = await ctx.database.get('binding', (row) => $.and($.eq(row.pid,userId),$.eq(row.platform,platform)), ['aid'])
     if (aids.length > 0) {
       return aids[0].aid
     }
@@ -371,8 +371,8 @@ export function apply(ctx: Context, config: Config) {
       }
       // 2. 更新违规记录
       const record = await ctx.database.get('keyword_violations', {
-        userId,
-        guildId
+        userId:userId,
+        guildId:guildId
       })
       let violationCount = 1
       if (record.length > 0) {
@@ -664,7 +664,7 @@ export function apply(ctx: Context, config: Config) {
       if (userId === null) return '请通过 @提及 指定用户'
       const userInfo = await session!.bot.getUser(userId)
       const userName = userInfo?.name || `用户${userId.slice(-4)}`
-      const aid = await resolveUser(userId)
+      const aid = await resolveUser(userId,session!.platform)
       if (aid === 0) return `用户未绑定`
       await ctx.database.withTransaction(async (t) => {
         // 使用批量更新优化
@@ -686,7 +686,7 @@ export function apply(ctx: Context, config: Config) {
       if (userId === null) return '请通过 @提及 指定用户'
       const userInfo = await session!.bot.getUser(userId)
       const userName = userInfo?.name || `用户${userId.slice(-4)}`
-      const aid = await resolveUser(userId)
+      const aid = await resolveUser(userId,session!.platform)
       if (aid === 0) return `用户未绑定`
       try {
         await ctx.database.withTransaction(async (t) => {
@@ -785,7 +785,7 @@ export function apply(ctx: Context, config: Config) {
     }
   }
 
-  // 监听入群申请
+  // 监听入群申请(注意群主邀请不会触发审核)
   ctx.on("guild-member-request", async (session) => {
     const exists = await ctx.database.get('blacklist_manager', {userId: session.userId})
     if (exists.length > 0) {
@@ -793,18 +793,22 @@ export function apply(ctx: Context, config: Config) {
         session.messageId,
         false
       );
+      ctx.logger.info(`已拒绝黑名单成员${session.userId}入群`)
     }
   });
 
-  // 监听入群邀请(注意群主邀请不会触发审核)
+  // 监听入群邀请
   ctx.on("guild-request", async (session) => {
-    const exists = await ctx.database.get('blacklist_manager', {userId: session.userId})
-    if (exists.length > 0) {
-      await session.bot.handleGuildRequest(
-        session.messageId,
-        false
-      );
+    const aid=await resolveUser(session.userId,session.platform)
+    const exists = await ctx.database.get('user', aid,['authority'])
+    let approve = false
+    if (exists.length>0&&exists[0].authority>3){
+      approve = true
     }
+    await session.bot.handleGuildRequest(
+      session.messageId,
+      approve
+    );
   });
 
   // 监听群成员减少事件
@@ -816,7 +820,7 @@ export function apply(ctx: Context, config: Config) {
       const userId = session!.event._data.user_id;
       const userInfo = await session!.bot.getUser(userId)
       const userName = userInfo?.name || `用户${userId.slice(-4)}`
-      const aid = await resolveUser(userId)
+      const aid = await resolveUser(userId,session.platform)
       if (aid === 0) return `用户未绑定`
       const isBlack = await isInBlacklist(userId)
       if (isBlack) return
