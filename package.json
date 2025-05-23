@@ -1,7 +1,7 @@
 {
   "name": "koishi-plugin-network-integral",
   "description": "自用插件，可配置指令指向http接口,附带黑名单管理和违禁词检测功能",
-  "version": "1.2.3",
+  "version": "1.2.12",
   "main": "lib/index.js",
   "scripts": {
     "build": "tsc",

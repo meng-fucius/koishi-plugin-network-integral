@@ -1,7 +1,6 @@
 import {Context, h, Schema, $} from 'koishi'
 import {} from 'koishi-plugin-cron'
-import axios from 'axios'
-
+import { jmComic,JMConfig } from './jm'
 export const name = 'network-integral'
 
 export const inject = ['database', 'cron']
@@ -33,6 +32,7 @@ export interface GroupMemberInfo {
 
 export interface Config {
   probability: number
+  authority:number
   scanInterval: string
   autoScan: boolean
   autoKick: boolean
@@ -61,6 +61,7 @@ export interface Config {
     muteThreshold: number  // 警告次数达到后禁言
     muteDuration: number   // 禁言时长(秒)
   }
+  jmComic: JMConfig
 }
 
 export const Config: Schema<Config> = Schema.object({
@@ -72,6 +73,7 @@ export const Config: Schema<Config> = Schema.object({
     .default(0.1)
     .description('每次发言触发加分的概率 (0=不触发，1=100%触发)')
     .role('slider'),
+  authority:Schema.number().default(1).description('随机加分触发的权限等级'),
   // ========================
   // 定时任务设置
   // ========================
@@ -133,6 +135,10 @@ export const Config: Schema<Config> = Schema.object({
       '• %count% - 违规次数',
       '• %total% - 禁言阈值'].join('\n')),
   }).description('关键词检测配置'),
+  // ========================
+  // jm漫画配置
+  // ========================
+  jmComic: JMConfig,
   // ========================
   // 消息模板配置
   // ========================
@@ -423,7 +429,7 @@ export function apply(ctx: Context, config: Config) {
       )
     } else {
         const userInfo = await session.getUser(userId)
-      if (Math.random() > config.probability || userInfo.authority ===0 ) return next()
+      if (Math.random() > config.probability || userInfo.authority <config.authority ) return next()
       const message = `randomAdd${userId}\$${username}`
       return next(message)
     }
@@ -436,7 +442,7 @@ export function apply(ctx: Context, config: Config) {
       if (userId === "") return
       session.content = ""
       try {
-        const response = await axios.post(`${config.api.baseUrl}/${config.api.endpoints.modify}`, {
+        const response = await ctx.http.post(`${config.api.baseUrl}/${config.api.endpoints.modify}`, {
           userId: userId,
           name: userName,
           operation: 'randomAdd',
@@ -475,7 +481,7 @@ export function apply(ctx: Context, config: Config) {
       const userInfo = await session.bot.getUser(userId)
       const userName = userInfo?.name || `用户${userId.slice(-4)}`
       try {
-        const response = await axios.post(`${config.api.baseUrl}/${config.api.endpoints.modify}`, {
+        const response = await ctx.http.post(`${config.api.baseUrl}/${config.api.endpoints.modify}`, {
           userId: userId,
           operation: 'add',
           name: userName,
@@ -513,7 +519,7 @@ export function apply(ctx: Context, config: Config) {
       const userInfo = await session.bot.getUser(userId)
       const userName = userInfo?.name || `用户${userId.slice(-4)}`
       try {
-        const response = await axios.post(`${config.api.baseUrl}/${config.api.endpoints.modify}`, {
+        const response = await ctx.http.post(`${config.api.baseUrl}/${config.api.endpoints.modify}`, {
           userId: userId,
           operation: 'deduct',
           amount: amount
@@ -565,7 +571,7 @@ export function apply(ctx: Context, config: Config) {
       const userName2 = userInfo2?.name || `用户${userId2.slice(-4)}`
 
       try {
-        const response = await axios.post(`${config.api.baseUrl}/${config.api.endpoints.modify}`, {
+        const response = await ctx.http.post(`${config.api.baseUrl}/${config.api.endpoints.modify}`, {
           userId: userId1,
           target: userId2,
           name: userName1,
@@ -601,9 +607,10 @@ export function apply(ctx: Context, config: Config) {
       if (!session) return
 
       try {
-        const response = await axios.get(`${config.api.baseUrl}/${config.api.endpoints.query}`, {
-          params: {userId: session.userId}
+        const params = new URLSearchParams({
+          userId: session.userId
         })
+        const response = await ctx.http.get(`${config.api.baseUrl}/${config.api.endpoints.query}?${params}`)
 
         if (response.data.code === 0) {
           const template = getRandomMessage(config.messages.querySuccess)
@@ -627,7 +634,7 @@ export function apply(ctx: Context, config: Config) {
       if (!session) return
 
       try {
-        const response = await axios.get(`${config.api.baseUrl}/${config.api.endpoints.rank}`)
+        const response = await ctx.http.get(`${config.api.baseUrl}/${config.api.endpoints.rank}`)
 
         if (response.data.code === 0) {
           const template = getRandomMessage(config.messages.rankSuccess)
@@ -833,4 +840,6 @@ export function apply(ctx: Context, config: Config) {
       return
     }
   });
+
+  ctx.plugin(jmComic, config.jmComic)
 }
