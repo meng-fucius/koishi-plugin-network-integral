@@ -192,21 +192,26 @@ URL: ${error.response?.url}
         if (options?.online){
           return h.text(`在线观看地址：${url}`)
         }else {
-          const filePath =session!.bot.internal.downloadFile(url)
-          if (filePath===""){
-            return `❌ 下载失败：${response.message}`
+          try {
+            const filePath =await session!.bot.internal.downloadFile(url)
+            ctx.logger.warn(filePath)
+            if (filePath===""){
+              return `❌ 下载失败：${response.message}`
+            }
+            session!.bot.internal.uploadGroupFile(session?.guild,filePath,filename)
+          }catch (e) {
+            ctx.logger.warn('jm下载失败 ',e)
           }
-          session!.bot.internal.uploadGroupFile(session?.guild,filePath,filename)
         }
         // if (options?.direct) {
-        //   const dUrl = `${BASE_URL}/get_pdf/${id}?${params}`
-        //   const data = await ctx.http.get(dUrl, {
-        //     responseType: 'arraybuffer',
-        //     headers: { Accept: 'application/pdf' },
-        //   })
-        //   return h.file(data, 'application/pdf',{
-        //     filename: `${id}.pdf`,
-        //   })
+          const dUrl = `${BASE_URL}/get_pdf/${id}?${params}`
+          const data = await ctx.http.get(dUrl, {
+            responseType: 'arraybuffer',
+            headers: { Accept: 'application/pdf' },
+          })
+          return h.file(Buffer.from(response), 'application/pdf',{
+            filename: `${id}.pdf`,
+          })
         // }
 
         // const response = await ctx.http.get<FileResponse>(url)
